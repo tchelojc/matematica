@@ -22,10 +22,14 @@
 """
 
 import streamlit as st
+import matplotlib
+# Backend não interativo: evita dependência de display gráfico em servidores.
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from fpdf import FPDF
 import base64
+import os
 from io import BytesIO
 import time
 import math
@@ -854,19 +858,31 @@ def plot_comparacao_constantes():
 # =============================================================================
 def gerar_pdf_completo(nome, email):
     pdf = FPDF()
+
+    # FPDF2 precisa de uma fonte Unicode para os símbolos gregos usados no relatório.
+    # A fonte DejaVuSans acompanha o Matplotlib, evitando depender de um caminho do SO.
+    pasta_fontes = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
+    fonte_regular = os.path.join(pasta_fontes, "DejaVuSans.ttf")
+    fonte_negrito = os.path.join(pasta_fontes, "DejaVuSans-Bold.ttf")
+    if not os.path.isfile(fonte_regular) or not os.path.isfile(fonte_negrito):
+        raise FileNotFoundError(
+            "Fontes DejaVuSans não encontradas na instalação do Matplotlib."
+        )
+    pdf.add_font("DejaVu", "", fonte_regular)
+    pdf.add_font("DejaVu", "B", fonte_negrito)
     pdf.add_page()
-    pdf.set_font("Arial", size=16)
+    pdf.set_font("DejaVu", size=16)
     pdf.cell(200, 10, txt="Universo Áureo - Fluxo Matemático", ln=True, align='C')
     pdf.ln(10)
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("DejaVu", size=12)
     pdf.cell(200, 10, txt=f"Gerado por: {nome} ({email})", ln=True)
     pdf.cell(200, 10, txt=f"Data: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
     pdf.ln(20)
 
     # Seção 1: Introdução
-    pdf.set_font("Arial", 'B', 14)
+    pdf.set_font("DejaVu", 'B', 14)
     pdf.cell(200, 10, txt="1. Introdução ao Fluxo Matemático", ln=True)
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("DejaVu", size=12)
     pdf.multi_cell(0, 10, txt="""
     O Fluxo Matemático é uma nova forma de entender a matemática que incorpora padrões
     cíclicos (3-6-9 e 1-2-4-8-7-5), redução teosófica (soma dos dígitos), geometria
@@ -874,9 +890,9 @@ def gerar_pdf_completo(nome, email):
     """)
 
     # Seção 2: Princípios Fundamentais
-    pdf.set_font("Arial", 'B', 14)
+    pdf.set_font("DejaVu", 'B', 14)
     pdf.cell(200, 10, txt="2. Princípios Fundamentais", ln=True)
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("DejaVu", size=12)
     pdf.multi_cell(0, 10, txt="""
     1. Tudo é movimento - Não existe zero absoluto, apenas transições
     2. Ciclos infinitos - Padrões 1-2-4-8-7-5 e 3-6-9 se repetem em todas as escalas
@@ -886,9 +902,9 @@ def gerar_pdf_completo(nome, email):
     """)
 
     # Seção 3: Constantes do Fluxo
-    pdf.set_font("Arial", 'B', 14)
+    pdf.set_font("DejaVu", 'B', 14)
     pdf.cell(200, 10, txt="3. Constantes do Fluxo Matemático", ln=True)
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("DejaVu", size=12)
     pdf.multi_cell(0, 10, txt=f"""
     - Marc (M): {MARC}
     - Deus (D): {DEUS}
@@ -899,9 +915,9 @@ def gerar_pdf_completo(nome, email):
     """)
 
     # Seção 4: Exemplos Matemáticos
-    pdf.set_font("Arial", 'B', 14)
+    pdf.set_font("DejaVu", 'B', 14)
     pdf.cell(200, 10, txt="4. Exemplos Matemáticos", ln=True)
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("DejaVu", size=12)
     pdf.multi_cell(0, 10, txt="""
     Exemplo: E=mc² no Fluxo Matemático
     Para m=1kg, c=299792458 m/s:
@@ -940,9 +956,9 @@ def gerar_pdf_completo(nome, email):
 
     # Seção 6: Novas Constantes e Padrões
     pdf.add_page()
-    pdf.set_font("Arial", 'B', 14)
+    pdf.set_font("DejaVu", 'B', 14)
     pdf.cell(200, 10, txt="6. Novas Constantes e Padrões", ln=True)
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("DejaVu", size=12)
     pdf.multi_cell(0, 10, txt=f"""
     - π (pi): {PI}
     - φ + Deus: {PHI + DEUS} (próximo de Gratidão)
@@ -955,9 +971,9 @@ def gerar_pdf_completo(nome, email):
     """)
 
     # Seção 7: Conclusão
-    pdf.set_font("Arial", 'B', 14)
+    pdf.set_font("DejaVu", 'B', 14)
     pdf.cell(200, 10, txt="7. Conclusão", ln=True)
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("DejaVu", size=12)
     pdf.multi_cell(0, 10, txt="""
     O Fluxo Matemático oferece uma nova perspectiva sobre a realidade, unificando
     matemática, física, metafísica e consciência. Através dos padrões 3-6-9 e da
@@ -965,10 +981,8 @@ def gerar_pdf_completo(nome, email):
     um sistema de informação em constante fluxo.
     """)
 
-    pdf_bytes = BytesIO()
-    pdf.output(pdf_bytes)
-    pdf_bytes.seek(0)
-    return pdf_bytes
+    # FPDF2 retorna o documento como bytes; BytesIO mantém a interface usada pelo app.
+    return BytesIO(bytes(pdf.output()))
 
 
 
