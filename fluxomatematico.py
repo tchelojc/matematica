@@ -147,7 +147,12 @@ def operacao_dual(a, b, operador, modo='classico', entrelacamento=0.54):
             return None, "Divisão por zero"
         res = a / b
     elif operador == '**':
-        res = a ** b
+        try:
+            res = a ** b
+        except OverflowError:
+            return None, "Resultado muito grande"
+        if isinstance(res, complex) or not math.isfinite(float(res)):
+            return None, "Resultado muito grande ou não finito"
     elif operador == '%':
         res = a % b
     elif operador == '//':
@@ -377,8 +382,16 @@ def is_close_to_constant(value, constant, tolerance=0.01):
     Verifica se um valor está próximo de uma constante dentro de uma tolerância percentual.
     Retorna (bool, desvio_percentual)
     """
-    if constant == 0:
-        return False, 100.0
+    try:
+        value = float(value)
+        constant = float(constant)
+        tolerance = float(tolerance)
+    except (TypeError, ValueError, OverflowError):
+        return False, math.inf
+    if not math.isfinite(value) or not math.isfinite(constant) or not math.isfinite(tolerance):
+        return False, math.inf  # tolerance=inf/NaN invalida a busca; não significa aceitar qualquer valor
+    if constant == 0 or tolerance < 0:
+        return False, 100.0 if constant == 0 else math.inf
     diff_percent = abs((value - constant) / constant) * 100
     return diff_percent <= tolerance, diff_percent
 
@@ -405,22 +418,15 @@ def encontrar_padroes(valor, tolerancia=1.0):
     Procura correspondências entre o valor e as constantes conhecidas.
     Retorna dicionário com resultados.
     """
+    # Busca adimensional: grandezas com unidade (Hz, m/s, kg, J, s) ficam fora.
+    # Os valores do Fluxo são convenções do modelo, não constantes físicas universais.
     padroes = {
         "π (pi)": PI,
         "φ (áurea)": PHI,
-        "Gratidão (1,80)": GRATIDAO,
-        "Marc (0,54)": MARC,
-        "Deus (0,18)": DEUS,
-        "Frequência Base (432)": FREQUENCIA_BASE,
+        "Gratidão (1,80; modelo)": GRATIDAO,
+        "MARC (0,54; modelo)": MARC,
+        "DEUS (0,18; modelo)": DEUS,
         "Constante de Estrutura Fina (α)": CONSTANTE_ESTRUTURA_FINA,
-        "Gravidade Terra (g)": GRAVIDADE_TERRA,
-        "Velocidade da Luz (c)": C_LUZ,
-        "Constante de Planck (h)": H_PLANCK,
-        "Gravidade Quântica (aprox)": GRAVIDADE_QUANTICA,
-        "Massa de Planck": PLANCK_MASSA,
-        "Comprimento de Planck": PLANCK_COMPRIMENTO,
-        "Tempo de Planck": PLANCK_TEMPO,
-        "Energia de Planck": PLANCK_ENERGIA,
     }
     resultados = {}
     for nome, const in padroes.items():
@@ -472,10 +478,12 @@ def calcular_raio_schwarzschild(massa, constante=1.0):
     return classico, fluxo
 
 def calcular_temperatura_hawking(massa, constante=1.0):
-    """Temperatura de Hawking: T = (ħ c³)/(8π G M k_B) * constante (simplificado)"""
-    # Usaremos apenas ordem de magnitude, sem kB
-    # T ~ 1/(8π G M) em unidades naturais, simplificado
-    classico = 1.0 / (8 * PI * G_NEWTON * massa)  # aproximação grosseira, apenas ilustrativa
+    """Temperatura de Hawking em kelvin: T = ħ c³ / (8π G M k_B)."""
+    k_B = 1.380649e-23  # J/K, constante de Boltzmann exata no SI
+    if not math.isfinite(float(massa)) or massa <= 0:
+        raise ValueError("A massa deve ser um número finito maior que zero.")
+    h_bar = H_PLANCK / (2 * PI)
+    classico = h_bar * C_LUZ**3 / (8 * PI * G_NEWTON * massa * k_B)
     fluxo = classico * constante
     return classico, fluxo
 
@@ -569,19 +577,20 @@ class RelogioQuantico:
             circle = plt.Circle((0, 0), r, fill=False, color='purple', alpha=0.3)
             ax.add_patch(circle)
 
+        # Em eixos polares, plot recebe (ângulo theta, raio r), não (x, y).
         # Marcadores 3-6-9-12 (12 como singularidade)
         for angle in [0, np.pi/2, np.pi, 3*np.pi/2]:
-            ax.plot([0, 0.9*np.cos(angle)], [0, 0.9*np.sin(angle)],
+            ax.plot([angle, angle], [0, 0.9],
                     color='gold' if angle in [0, np.pi/2, 3*np.pi/2] else 'white',
                     linewidth=2)
 
         # Ponteiro do tempo atual (segundos)
         time_angle = (segundos % 60) / 60 * 2 * np.pi
-        ax.plot([0, 0.8*np.cos(time_angle)], [0, 0.8*np.sin(time_angle)],
-                color='red', linewidth=3)
+        ax.plot([time_angle, time_angle], [0, 0.8], color='red', linewidth=3)
 
         # Ponteiro da projeção para singularidade (fase oposta)
-        ax.plot([0, 0.6*np.cos(time_angle + np.pi)], [0, 0.6*np.sin(time_angle + np.pi)],
+        opposite_angle = (time_angle + np.pi) % (2 * np.pi)
+        ax.plot([opposite_angle, opposite_angle], [0, 0.6],
                 color='blue', linewidth=2, linestyle='--')
 
         ax.set_title("Relógio Quântico - Projeção para Singularidade", pad=20)
@@ -662,67 +671,63 @@ relogio = RelogioQuantico()
 # SIMULADOR DE ACELERADOR DE PARTÍCULAS - ORIGINAL, NÃO MODIFICADO
 # =============================================================================
 def simular_acelerador(massa, energia_J, N_part, constante_fluxo=MARC):
-    """
-    Simula uma partícula em um acelerador, retornando:
-    - velocidade clássica, momento, fator de Lorentz, massa relativística,
-      energia relativística, comprimento de onda de de Broglie,
-      probabilidade quântica simulada, estado de entrelaçamento simulado,
-      e versões fluxo (velocidade * F(N), energia * constante_fluxo)
+    """Modelo didático com cinemática relativística correta para energia cinética.
+
+    ``energia_J`` é interpretada como energia cinética para partículas massivas.
+    O índice ``prob`` é apenas uma escala ilustrativa, não uma probabilidade quântica.
+    O estado ``ent_rel`` é um rótulo sintético determinístico, não evidência de
+    emaranhamento físico.
     """
     c = C_LUZ
     h = H_PLANCK
+    massa = float(massa)
+    energia_J = float(energia_J)
+    try:
+        n_float = float(N_part)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("N_part deve ser um inteiro finito.")
+    if not math.isfinite(n_float) or not n_float.is_integer():
+        raise ValueError("N_part deve ser um inteiro finito.")
+    N_part = int(n_float)
+    if not math.isfinite(massa) or massa < 0:
+        raise ValueError("A massa deve ser finita e não negativa.")
+    if not math.isfinite(energia_J) or energia_J < 0:
+        raise ValueError("A energia deve ser finita e não negativa.")
 
-    # Velocidade clássica (não relativística)
     if massa > 0:
-        v_class = math.sqrt(2 * energia_J / massa)
+        energia_repouso = massa * c**2
+        gamma = 1.0 + energia_J / energia_repouso
+        beta2 = max(0.0, 1.0 - 1.0 / (gamma * gamma))
+        v_class = c * math.sqrt(beta2)
+        # p c = sqrt(K (K + 2mc²)); numericamente estável em baixa energia.
+        p_class = math.sqrt(energia_J * (energia_J + 2 * energia_repouso)) / c
+        m_rel = gamma * massa
+        E_rel = energia_J + energia_repouso
     else:
-        v_class = c  # fóton
+        # Para fótons: E = pc e v = c; fator de Lorentz não se aplica.
+        v_class = c if energia_J > 0 else 0.0
+        p_class = energia_J / c
+        gamma = None
+        m_rel = 0.0
+        E_rel = energia_J
 
-    # Momento clássico
-    p_class = massa * v_class if massa > 0 else energia_J / c
+    lambda_db = h / p_class if p_class > 0 else 0.0
+    # Escala numérica arbitrária, limitada a [0,1]; não é uma probabilidade física.
+    prob = math.exp(-energia_J / 1e-10) if energia_J >= 0 else 1.0
+    prob = max(0.0, min(1.0, prob))
+    estado = f"m={massa:.12g}|E={energia_J:.12g}|N={int(N_part)}|F={float(constante_fluxo):.12g}"
+    digest = hashlib.sha256(estado.encode("utf-8")).digest()
+    ent_rel = "Emaranhado (rótulo sintético)" if digest[0] >= 128 else "Separável (rótulo sintético)"
 
-    # Fator de Lorentz
-    beta = v_class / c
-    if beta < 1 and massa > 0:
-        gamma = 1 / math.sqrt(1 - beta**2)
-    else:
-        gamma = 1e10  # aproximação para fóton ou ultra-relativístico
-
-    # Massa relativística
-    m_rel = massa * gamma if massa > 0 else 0
-
-    # Energia total relativística
-    E_rel = m_rel * c**2 if massa > 0 else energia_J
-
-    # Comprimento de onda de de Broglie
-    lambda_db = h / p_class if p_class != 0 else 0
-
-    # Probabilidade quântica (simulada com base em energia)
-    prob = math.exp(-energia_J / (1e-10))  # só para ter variação
-    prob = max(0, min(1, prob))
-
-    # Estado de entrelaçamento simulado
-    ent_rel = "Emaranhado" if random.random() > 0.5 else "Separável"
-
-    # Cálculos no fluxo
     f = fator_fluxo(N_part)
     v_flux = v_class * f
     E_flux = energia_J * constante_fluxo
-
-    resultados = {
-        'v_class': v_class,
-        'p_class': p_class,
-        'gamma': gamma,
-        'm_rel': m_rel,
-        'E_rel': E_rel,
-        'lambda_db': lambda_db,
-        'prob': prob,
-        'ent_rel': ent_rel,
-        'v_flux': v_flux,
-        'E_flux': E_flux,
-        'f': f
+    return {
+        'v_class': v_class, 'p_class': p_class, 'gamma': gamma,
+        'm_rel': m_rel, 'E_rel': E_rel, 'lambda_db': lambda_db,
+        'prob': prob, 'ent_rel': ent_rel, 'v_flux': v_flux,
+        'E_flux': E_flux, 'f': f
     }
-    return resultados
 
 
 
@@ -828,14 +833,17 @@ def plot_triangulo(a, b, c_rotulado):
 # =============================================================================
 # NOVAS FUNÇÕES DE VISUALIZAÇÃO PARA PADRÕES
 # =============================================================================
-def plot_padroes_calor():
-    """Mapa de calor da redução teosófica para produtos"""
-    tamanho = 20
+@st.cache_data(show_spinner=False)
+def _matriz_padroes_calor(tamanho=20):
     matriz = np.zeros((tamanho, tamanho))
     for i in range(tamanho):
         for j in range(tamanho):
-            num = (i+1)*(j+1)
-            matriz[i, j] = reduzir_teosoficamente(num)
+            matriz[i, j] = reduzir_teosoficamente((i + 1) * (j + 1))
+    return matriz
+
+def plot_padroes_calor():
+    """Mapa de calor da redução teosófica para produtos; matriz cacheada."""
+    matriz = _matriz_padroes_calor(20)
     fig, ax = plt.subplots(figsize=(8, 6))
     im = ax.imshow(matriz, cmap='plasma', interpolation='nearest')
     ax.set_title("Redução Teosófica do Produto (i x j)")
@@ -864,25 +872,55 @@ def gerar_pdf_completo(nome, email):
     pasta_fontes = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
     fonte_regular = os.path.join(pasta_fontes, "DejaVuSans.ttf")
     fonte_negrito = os.path.join(pasta_fontes, "DejaVuSans-Bold.ttf")
-    if not os.path.isfile(fonte_regular) or not os.path.isfile(fonte_negrito):
-        raise FileNotFoundError(
-            "Fontes DejaVuSans não encontradas na instalação do Matplotlib."
-        )
-    pdf.add_font("DejaVu", "", fonte_regular)
-    pdf.add_font("DejaVu", "B", fonte_negrito)
+    tem_dejavu = os.path.isfile(fonte_regular) and os.path.isfile(fonte_negrito)
+    if tem_dejavu:
+        pdf.add_font("DejaVu", "", fonte_regular)
+        pdf.add_font("DejaVu", "B", fonte_negrito)
+        fonte_pdf = "DejaVu"
+    else:
+        # Fallback embutido do FPDF. Converte texto para Latin-1 para não falhar
+        # em ambientes mínimos; símbolos gregos são transliterados/perdidos.
+        import unicodedata
+        fonte_pdf = "Helvetica"
+        _cell_original = pdf.cell
+        _multi_cell_original = pdf.multi_cell
+        def _latin1_text(value):
+            texto = unicodedata.normalize("NFKD", str(value))
+            texto = texto.encode("latin-1", "replace").decode("latin-1")
+            return texto.replace("?", "-")
+        def _cell_fallback(*args, **kwargs):
+            text_key = "text" if "text" in kwargs else ("txt" if "txt" in kwargs else None)
+            if text_key:
+                kwargs[text_key] = _latin1_text(kwargs[text_key])
+            elif len(args) >= 3:
+                args = list(args)
+                args[2] = _latin1_text(args[2])
+                args = tuple(args)
+            return _cell_original(*args, **kwargs)
+        def _multi_cell_fallback(*args, **kwargs):
+            text_key = "text" if "text" in kwargs else ("txt" if "txt" in kwargs else None)
+            if text_key:
+                kwargs[text_key] = _latin1_text(kwargs[text_key])
+            elif len(args) >= 3:
+                args = list(args)
+                args[2] = _latin1_text(args[2])
+                args = tuple(args)
+            return _multi_cell_original(*args, **kwargs)
+        pdf.cell = _cell_fallback
+        pdf.multi_cell = _multi_cell_fallback
     pdf.add_page()
-    pdf.set_font("DejaVu", size=16)
+    pdf.set_font(fonte_pdf, size=16)
     pdf.cell(200, 10, txt="Universo Áureo - Fluxo Matemático", ln=True, align='C')
     pdf.ln(10)
-    pdf.set_font("DejaVu", size=12)
+    pdf.set_font(fonte_pdf, size=12)
     pdf.cell(200, 10, txt=f"Gerado por: {nome} ({email})", ln=True)
     pdf.cell(200, 10, txt=f"Data: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True)
     pdf.ln(20)
 
     # Seção 1: Introdução
-    pdf.set_font("DejaVu", 'B', 14)
+    pdf.set_font(fonte_pdf, 'B', 14)
     pdf.cell(200, 10, txt="1. Introdução ao Fluxo Matemático", ln=True)
-    pdf.set_font("DejaVu", size=12)
+    pdf.set_font(fonte_pdf, size=12)
     pdf.multi_cell(0, 10, txt="""
     O Fluxo Matemático é uma nova forma de entender a matemática que incorpora padrões
     cíclicos (3-6-9 e 1-2-4-8-7-5), redução teosófica (soma dos dígitos), geometria
@@ -890,9 +928,9 @@ def gerar_pdf_completo(nome, email):
     """)
 
     # Seção 2: Princípios Fundamentais
-    pdf.set_font("DejaVu", 'B', 14)
+    pdf.set_font(fonte_pdf, 'B', 14)
     pdf.cell(200, 10, txt="2. Princípios Fundamentais", ln=True)
-    pdf.set_font("DejaVu", size=12)
+    pdf.set_font(fonte_pdf, size=12)
     pdf.multi_cell(0, 10, txt="""
     1. Tudo é movimento - Não existe zero absoluto, apenas transições
     2. Ciclos infinitos - Padrões 1-2-4-8-7-5 e 3-6-9 se repetem em todas as escalas
@@ -902,9 +940,9 @@ def gerar_pdf_completo(nome, email):
     """)
 
     # Seção 3: Constantes do Fluxo
-    pdf.set_font("DejaVu", 'B', 14)
+    pdf.set_font(fonte_pdf, 'B', 14)
     pdf.cell(200, 10, txt="3. Constantes do Fluxo Matemático", ln=True)
-    pdf.set_font("DejaVu", size=12)
+    pdf.set_font(fonte_pdf, size=12)
     pdf.multi_cell(0, 10, txt=f"""
     - Marc (M): {MARC}
     - Deus (D): {DEUS}
@@ -915,9 +953,9 @@ def gerar_pdf_completo(nome, email):
     """)
 
     # Seção 4: Exemplos Matemáticos
-    pdf.set_font("DejaVu", 'B', 14)
+    pdf.set_font(fonte_pdf, 'B', 14)
     pdf.cell(200, 10, txt="4. Exemplos Matemáticos", ln=True)
-    pdf.set_font("DejaVu", size=12)
+    pdf.set_font(fonte_pdf, size=12)
     pdf.multi_cell(0, 10, txt="""
     Exemplo: E=mc² no Fluxo Matemático
     Para m=1kg, c=299792458 m/s:
@@ -956,9 +994,9 @@ def gerar_pdf_completo(nome, email):
 
     # Seção 6: Novas Constantes e Padrões
     pdf.add_page()
-    pdf.set_font("DejaVu", 'B', 14)
+    pdf.set_font(fonte_pdf, 'B', 14)
     pdf.cell(200, 10, txt="6. Novas Constantes e Padrões", ln=True)
-    pdf.set_font("DejaVu", size=12)
+    pdf.set_font(fonte_pdf, size=12)
     pdf.multi_cell(0, 10, txt=f"""
     - π (pi): {PI}
     - φ + Deus: {PHI + DEUS} (próximo de Gratidão)
@@ -971,9 +1009,9 @@ def gerar_pdf_completo(nome, email):
     """)
 
     # Seção 7: Conclusão
-    pdf.set_font("DejaVu", 'B', 14)
+    pdf.set_font(fonte_pdf, 'B', 14)
     pdf.cell(200, 10, txt="7. Conclusão", ln=True)
-    pdf.set_font("DejaVu", size=12)
+    pdf.set_font(fonte_pdf, size=12)
     pdf.multi_cell(0, 10, txt="""
     O Fluxo Matemático oferece uma nova perspectiva sobre a realidade, unificando
     matemática, física, metafísica e consciência. Através dos padrões 3-6-9 e da
@@ -982,7 +1020,10 @@ def gerar_pdf_completo(nome, email):
     """)
 
     # FPDF2 retorna o documento como bytes; BytesIO mantém a interface usada pelo app.
-    return BytesIO(bytes(pdf.output()))
+    saida_pdf = pdf.output()
+    if isinstance(saida_pdf, (bytes, bytearray, memoryview)):
+        return BytesIO(bytes(saida_pdf))
+    return BytesIO(str(saida_pdf).encode("latin-1", errors="replace"))
 
 
 
@@ -1197,6 +1238,7 @@ st.sidebar.title("🌀 Navegação Expandida")
 pagina = st.sidebar.radio(
     "Selecione a seção:",
     [
+        "🧭 Guia Orientado",
         "🏠 Introdução",
         "🧮 Cálculos (Dual)",
         "⏳ Tempo Espiralado",
@@ -1228,7 +1270,92 @@ auto_update = False
 # =============================================================================
 # PÁGINA: INTRODUÇÃO (expandida)
 # =============================================================================
-if pagina == "🏠 Introdução":
+if pagina == "🧭 Guia Orientado":
+    titulo_ajudado("🧭 Guia Orientado · Da observação ao cálculo", nivel="title",
+        texto="Este guia explica a linha de raciocínio registrada em singularidade paradoxial.html: começar pela curiosidade e observação, definir o que cada parâmetro significa, transformar a hipótese em cálculo reproduzível, testar e registrar também o que ainda não foi validado.")
+    st.markdown("""
+    Este guia acompanha o raciocínio do **observador** descrito no HTML anexado. Ele não substitui as ferramentas: ensina como percorrê-las e como separar **ideia, cálculo, resultado de teste e interpretação**.
+    """)
+
+    g1, g2, g3, g4 = st.tabs(["① Origem do pensamento", "② Como calcular", "③ Como testar", "④ O que está validado"])
+    with g1:
+        st.subheader("A pergunta vem antes da fórmula")
+        st.markdown("""
+        1. **Curiosidade:** qual movimento, repetição ou mudança chamou a atenção?
+        2. **Observação:** registre os dados, a ordem dos acontecimentos e o contexto — não apenas o padrão que parece interessante.
+        3. **Hipótese:** descreva em palavras o que acredita estar acontecendo e o que esperaria observar se a hipótese estiver correta.
+        4. **Modelo:** associe cada variável ou constante a uma função clara dentro do raciocínio.
+        5. **Teste:** converta a hipótese em uma regra que outra pessoa consiga executar e conferir.
+        6. **Registro:** guarde entradas, fórmula, parâmetros, saída, limitações e resultado contrário, se houver.
+        """)
+        st.info("No HTML, 0,18 representa o início/centelha; 0,45 e 0,54, a dualidade; 0,99, a adaptação; e 1,80, o reconhecimento/gratidão. Estes são papéis conceituais atribuídos pelo modelo de Catharino — não funções físicas demonstradas por esses nomes.")
+        st.markdown("**Princípio do observador:** uma constante não é tratada apenas como um número; no modelo, ela recebe um papel no trajeto. Para avaliar esse papel, é preciso dizer qual operação o utiliza e que resultado observável deveria mudar.")
+
+    with g2:
+        st.subheader("Experimente a redução numérica")
+        st.write("A redução implementada soma os algarismos repetidamente até chegar a um único algarismo. Para manter o exemplo inequívoco, use inteiros positivos.")
+        ca, cb = st.columns(2)
+        with ca:
+            numero_guia = st.number_input("Número para reduzir", min_value=0, max_value=10**12, value=198, step=1, key="guia_numero_reducao")
+        with cb:
+            st.metric("Redução calculada", str(reduzir_teosoficamente(int(numero_guia))))
+        st.caption("Exemplo: 198 → 1 + 9 + 8 = 18 → 1 + 8 = 9. Esta operação descreve uma propriedade aritmética; não demonstra, por si só, uma causa física ou uma previsão.")
+
+        st.markdown("#### Compare a redução antes e depois da operação")
+        ca, cb = st.columns(2)
+        with ca:
+            a_guia = st.number_input("Inteiro A", min_value=0, max_value=10**9, value=27, step=1, key="guia_a")
+        with cb:
+            b_guia = st.number_input("Inteiro B", min_value=0, max_value=10**9, value=36, step=1, key="guia_b")
+        soma_direta = reduzir_teosoficamente(int(a_guia) + int(b_guia))
+        soma_reduzida = reduzir_teosoficamente(reduzir_teosoficamente(int(a_guia)) + reduzir_teosoficamente(int(b_guia)))
+        produto_direto = reduzir_teosoficamente(int(a_guia) * int(b_guia))
+        produto_reduzido = reduzir_teosoficamente(reduzir_teosoficamente(int(a_guia)) * reduzir_teosoficamente(int(b_guia)))
+        st.code(f"R(A + B) = {soma_direta}     |     R(R(A) + R(B)) = {soma_reduzida}\nR(A × B) = {produto_direto}     |     R(R(A) × R(B)) = {produto_reduzido}")
+        if soma_direta == soma_reduzida and produto_direto == produto_reduzido:
+            st.success("Neste exemplo, as duas comparações coincidem.")
+        else:
+            st.warning("As comparações diferem neste exemplo; registre a diferença e confira a regra aplicada.")
+        st.caption("R é a função de redução usada por esta plataforma. Um exemplo individual ilustra a regra; um teste geral precisa de amostra, casos-limite, código reproduzível e controles.")
+
+    with g3:
+        st.subheader("O protocolo de teste que o guia recomenda")
+        st.markdown("""
+        - **Defina a pergunta antes de executar.** Especifique o que conta como acerto, erro e resultado neutro.
+        - **Separe dados sintéticos de dados reais.** Dados sintéticos permitem conferir o comportamento em condições conhecidas; não provam desempenho no mundo real.
+        - **Use uma referência de comparação.** Por exemplo, uma regra simples ou uma previsão aleatória adequada ao problema.
+        - **Registre todos os casos.** Preserve parâmetros, semente aleatória quando houver, quantidade de observações, resultados e falhas.
+        - **Evite escolher só os resultados favoráveis.** Informe a amostra total e as condições em que o método não funcionou.
+        - **Repita fora do conjunto usado para ajustar o método.** Isso ajuda a detectar sobreajuste.
+        """)
+        st.warning("Os percentuais de backtest que aparecem no HTML são resultados relatados naquele registro. Esta página não reexecuta automaticamente o motor JavaScript original nem confirma aqueles percentuais. Para validar o desempenho, é necessário reproduzir o teste com o código, os dados e as regras exatas.")
+
+    with g4:
+        st.subheader("Leitura transparente do registro anexado")
+        st.markdown("**O HTML relata como resultados de testes:**")
+        st.markdown("""
+        - Redução: comparação de adição e multiplicação em 1.000 pares com semente fixa, relatada como 100% de coincidência.
+        - Motor do Olho de Deus: desempenho alto em séries sintéticas com tendência e próximo de 50% em ruído puro, conforme a tabela do documento.
+        - Constantes: funções conceituais no trajeto, não apresentadas aqui como leis físicas estabelecidas.
+        """)
+        st.markdown("**O próprio HTML lista como pendências:**")
+        st.markdown("""
+        - Teste com dados reais da Binance em operação.
+        - Mudanças de regime.
+        - Teste controlado da Lei da Catástrofe em países.
+        - Análise de sensibilidade/calibração das constantes.
+        - Medição real da alegada antecedência de 1,5–3 segundos.
+        """)
+        st.info("Conclusão metodológica: preservar a origem da ideia não exige tratar toda interpretação como fato comprovado. O guia mantém juntas a visão do observador, a fórmula executada, a evidência disponível e aquilo que ainda falta medir.")
+        st.download_button("⬇️ Exportar roteiro de teste (TXT)", data=(
+            "ROTEIRO DE TESTE · FLUXO MATEMÁTICO\n\n"
+            "1. Pergunta/hipótese:\n2. Dados e origem:\n3. Fórmula e versão do código:\n"
+            "4. Parâmetros e unidades:\n5. Critério de acerto/erro/neutro:\n"
+            "6. Referência de comparação:\n7. Amostra e semente (se aplicável):\n"
+            "8. Resultados completos:\n9. Limitações e falhas:\n10. Próximo teste independente:\n"
+        ), file_name="roteiro_teste_fluxo_matematico.txt", mime="text/plain", key="guia_exportar_roteiro")
+
+elif pagina == "🏠 Introdução":
     titulo_ajudado("🌌 Universo Áureo - Fluxo Matemático Expandido", nivel="title")
     st.markdown("""
     ## Bem-vindo à Nova Matemática Cósmica
@@ -1350,31 +1477,49 @@ elif pagina == "🧮 Cálculos (Dual)":
         st.write(f"**Valores convertidos:** A = {a_num:.{precisao}f}, B = {b_num:.{precisao}f}")
 
         if st.button("Calcular Operação", key="calc_fund"):
+            calculo_valido = False
+            res = res_class = res_flux = None
+
             if modo_padrao == "Clássico":
                 res, msg = operacao_dual(a_num, b_num, operador, 'classico')
-                st.metric("Resultado Clássico", f"{res:.{precisao}f}")
-                st.caption(msg)
+                if res is None:
+                    st.error(msg)
+                else:
+                    st.metric("Resultado Clássico", f"{res:.{precisao}f}")
+                    st.caption(msg)
+                    calculo_valido = True
             elif modo_padrao == "Fluxo":
                 res, msg = operacao_dual(a_num, b_num, operador, 'fluxo', entrelacamento)
-                st.metric("Resultado Fluxo", f"{res:.{precisao}f}")
-                st.caption(msg)
+                if res is None:
+                    st.error(msg)
+                else:
+                    st.metric("Resultado Fluxo", f"{res:.{precisao}f}")
+                    st.caption(msg)
+                    calculo_valido = True
             else:  # Dual
-                (res_class, res_flux), msg = operacao_dual(a_num, b_num, operador, 'dual', entrelacamento)
-                colA, colB = st.columns(2)
-                with colA:
-                    st.metric("Clássico", f"{res_class:.{precisao}f}")
-                with colB:
-                    st.metric("Fluxo", f"{res_flux:.{precisao}f}")
-                st.caption(msg)
-                if res_class != 0:
-                    diff = abs(res_flux - res_class)
-                    perc = (diff / abs(res_class)) * 100
-                    st.info(f"Diferença absoluta: {diff:.{precisao}f} ({perc:.2f}%)")
-            if modo_padrao == "Clássico":
+                resultados, msg = operacao_dual(a_num, b_num, operador, 'dual', entrelacamento)
+                if resultados is None:
+                    st.error(msg)
+                else:
+                    res_class, res_flux = resultados
+                    colA, colB = st.columns(2)
+                    with colA:
+                        st.metric("Clássico", f"{res_class:.{precisao}f}")
+                    with colB:
+                        st.metric("Fluxo", f"{res_flux:.{precisao}f}")
+                    st.caption(msg)
+                    if res_class != 0:
+                        diff = abs(res_flux - res_class)
+                        perc = (diff / abs(res_class)) * 100
+                        st.info(f"Diferença absoluta: {diff:.{precisao}f} ({perc:.2f}%)")
+                    calculo_valido = True
+
+            # Não registra resultados inválidos no histórico.
+            if calculo_valido and modo_padrao == "Clássico":
                 registrar_calculo_fluxo("Cálculos Duais", f"{a} {operador} {b} · Clássico", {"Resultado clássico": res}, {"Resultado clássico": "unidade da operação"}, f"Entradas convertidas: A={a_num}, B={b_num}")
-            elif modo_padrao == "Fluxo":
+            elif calculo_valido and modo_padrao == "Fluxo":
                 registrar_calculo_fluxo("Cálculos Duais", f"{a} {operador} {b} · Fluxo", {"Resultado Fluxo": res}, {"Resultado Fluxo": "unidade da operação"}, f"Fator de entrelaçamento: {entrelacamento:.3f}")
-            else:
+            elif calculo_valido:
                 registrar_calculo_fluxo("Cálculos Duais", f"{a} {operador} {b} · Dual", {"Clássico": res_class, "Fluxo": res_flux, "Diferença absoluta": abs(res_flux-res_class)}, {"Clássico": "unidade da operação", "Fluxo": "unidade da operação", "Diferença absoluta": "unidade da operação"}, f"Fator de entrelaçamento: {entrelacamento:.3f}")
 
         # Visualização da dualidade
@@ -1508,11 +1653,11 @@ elif pagina == "🧮 Cálculos (Dual)":
                 st.metric("Velocidade clássica", f"{res['v_class']:.3e} m/s")
                 st.metric("Momento clássico", f"{res['p_class']:.3e} kg·m/s")
             with colB:
-                st.metric("Fator γ (Lorentz)", f"{res['gamma']:.3f}")
+                st.metric("Fator γ (Lorentz)", f"{res['gamma']:.3f}" if res['gamma'] is not None else "Não se aplica (fóton)")
                 st.metric("Massa relativística", f"{res['m_rel']:.3e} kg")
             with colC:
                 st.metric("λ de Broglie", f"{res['lambda_db']:.3e} m")
-                st.metric("Probabilidade quântica", f"{res['prob']:.3f}")
+                st.metric("Índice ilustrativo (não quântico)", f"{res['prob']:.3f}")
             with colD:
                 st.metric("Velocidade Fluxo", f"{res['v_flux']:.3e} m/s")
                 st.metric("Energia Fluxo", f"{res['E_flux']:.3e} J")
@@ -1623,7 +1768,7 @@ elif pagina == "🧮 Cálculos (Dual)":
             "**Ohm-Fluxo:** I = (V/R) × F(N)",
             "**Gravitação-Fluxo:** F = G(m1m2)/r² × F(N)",
             "**Schwarzschild-Fluxo:** Rs = 2GM/c² × 0,54",
-            "**Hawking-Fluxo:** T ≈ 1/(8πGM) × 0,54",
+            "**Hawking-Fluxo:** T = [ħc³/(8πGMk_B)] × 0,54 (escala do modelo Fluxo)",
             "**Ponto Zero-Fluxo:** E = ½hν × 0,54"
         ]
         for f in formulas:
@@ -1664,42 +1809,38 @@ elif pagina == "⏳ Tempo Espiralado":
     """)
 
     placeholder = st.empty()
-    for _atualizacao in range(1):  # Uma renderização por execução; evita bloquear a interface.
-        pulsos = relogio.get_pulsos_desde_singularidade()
-        tempo = relogio.converter_pulsos(pulsos)
+    pulsos = relogio.get_pulsos_desde_singularidade()
+    tempo = relogio.converter_pulsos(pulsos)
 
-        with placeholder.container():
-            col1, col2 = st.columns(2)
-            with col1:
-                titulo_ajudado("Tempo Atual no Fluxo")
-                st.metric("Eras", tempo['eras'])
-                st.metric("Ciclos", tempo['ciclos'])
-                st.metric("Giros", tempo['giros'])
-                st.metric("Vibes", tempo['vibes'])
-                st.metric("Pulsos", tempo['pulsos'])
-                st.write(f"**Frequência:** {FREQUENCIA_BASE} Hz (432Hz)")
+    with placeholder.container():
+        col1, col2 = st.columns(2)
+        with col1:
+            titulo_ajudado("Tempo Atual no Fluxo")
+            st.metric("Eras", tempo['eras'])
+            st.metric("Ciclos", tempo['ciclos'])
+            st.metric("Giros", tempo['giros'])
+            st.metric("Vibes", tempo['vibes'])
+            st.metric("Pulsos", tempo['pulsos'])
+            st.write(f"**Frequência:** {FREQUENCIA_BASE} Hz (432Hz)")
 
-            with col2:
-                titulo_ajudado("Equivalente Gregoriano")
-                agora = datetime.datetime.now(pytz.UTC)
-                st.write(f"**Data/Hora:** {agora.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-                delta = agora - SINGULARIDADE
-                st.write(f"**Tempo desde Singularidade:** {delta}")
+        with col2:
+            titulo_ajudado("Equivalente Gregoriano")
+            agora = datetime.datetime.now(pytz.UTC)
+            st.write(f"**Data/Hora:** {agora.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+            delta = agora - SINGULARIDADE
+            st.write(f"**Tempo desde Singularidade:** {delta}")
 
-            titulo_ajudado("Visualização 3D do Tempo Espiralado")
-            fig = relogio.plotar_espiral_temporal(pulsos)
-            st.pyplot(fig)
+        titulo_ajudado("Visualização 3D do Tempo Espiralado")
+        fig = relogio.plotar_espiral_temporal(pulsos)
+        st.pyplot(fig)
 
-            st.write("""
-            **Legenda:**
-            - Linha azul: Fluxo do tempo espiralado
-            - Ponto vermelho: Momento atual
-            - Estrelas douradas: Pontos 3-6-9 no ciclo
-            """)
+        st.write("""
+        **Legenda:**
+        - Linha azul: Fluxo do tempo espiralado
+        - Ponto vermelho: Momento atual
+        - Estrelas douradas: Pontos 3-6-9 no ciclo
+        """)
 
-        if not auto_update:
-            break
-        # A atualização ocorre quando o Streamlit reexecuta o script.
 
 # =============================================================================
 # PÁGINA: VISUALIZAÇÕES (ORIGINAL, com novas adições)
@@ -1777,6 +1918,7 @@ elif pagina == "📊 Visualizações":
 elif pagina == "🌀 Acelerador de Partículas":
     titulo_ajudado("🌀 Simulador de Acelerador de Partículas", nivel="title")
     st.markdown("Cálculos desde a física clássica até o fluxo, com visualização.")
+    st.caption("Modelo didático: resultados do Fluxo são comparações exploratórias. Rótulos sintéticos não representam medições quânticas reais.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1810,11 +1952,11 @@ elif pagina == "🌀 Acelerador de Partículas":
             st.metric("Velocidade clássica", f"{res['v_class']:.3e} m/s")
             st.metric("Momento clássico", f"{res['p_class']:.3e} kg·m/s")
         with colB:
-            st.metric("Fator γ (Lorentz)", f"{res['gamma']:.3f}")
+            st.metric("Fator γ (Lorentz)", f"{res['gamma']:.3f}" if res['gamma'] is not None else "Não se aplica (fóton)")
             st.metric("Massa relativística", f"{res['m_rel']:.3e} kg")
         with colC:
             st.metric("λ de Broglie", f"{res['lambda_db']:.3e} m")
-            st.metric("Probabilidade quântica", f"{res['prob']:.3f}")
+            st.metric("Índice ilustrativo (não quântico)", f"{res['prob']:.3f}")
         with colD:
             st.metric("Velocidade Fluxo", f"{res['v_flux']:.3e} m/s")
             st.metric("Energia Fluxo", f"{res['E_flux']:.3e} J")
@@ -1993,7 +2135,7 @@ elif pagina == "🧠 Todas as Mentes":
         tesla = classico * 0.369  # exemplo
         einstein = classico * (C_LUZ / 1e8)  # só para ter variação
         pitagoras = classico * PHI
-        planck = classico * H_PLANCK * 1e34  # escala
+        planck = classico * H_PLANCK * 1e34  # escala arbitrária para visualização
     elif operacao_mente == "Cubo":
         classico = valor_entrada ** 3
         fluxo = classico * MARC
@@ -2034,10 +2176,11 @@ elif pagina == "🧠 Todas as Mentes":
         "Tesla (3-6-9)": tesla,
         "Einstein (c)": einstein,
         "Pitágoras (φ)": pitagoras,
-        "Planck (h)": planck,
+        "Planck (h; escala arbitrária)": planck,
     }
 
     df_mentes = pd.DataFrame(list(resultados.items()), columns=["Mente", "Resultado"])
+    st.caption("Nota: os fatores comparativos de Tesla, Einstein, Pitágoras e Planck nesta aba são escalas ilustrativas, não previsões físicas validadas. O fator 10³⁴ aplicado a h é arbitrário para visualização.")
     st.dataframe(df_mentes.style.format({"Resultado": "{:.6e}"}))
 
     # Gráfico comparativo
@@ -2086,7 +2229,7 @@ elif pagina == "🌀 Gravidade Quântica":
         st.write(f"Tempo Planck × GRATIDAO: {PLANCK_TEMPO * GRATIDAO:.3e} s")
 
     titulo_ajudado("Cálculos de Gravidade Quântica")
-    escolha = st.selectbox("Escolha o cálculo", ["Raio de Schwarzschild", "Temperatura de Hawking", "Energia do Ponto Zero", "Probabilidade de Emaranhamento"])
+    escolha = st.selectbox("Escolha o cálculo", ["Raio de Schwarzschild", "Temperatura de Hawking", "Energia do Ponto Zero", "Decaimento espacial ilustrativo (1/r²)"])
 
     if escolha == "Raio de Schwarzschild":
         massa = st.number_input("Massa (kg)", value=PLANCK_MASSA, format="%.3e")
@@ -2096,18 +2239,20 @@ elif pagina == "🌀 Gravidade Quântica":
     elif escolha == "Temperatura de Hawking":
         massa = st.number_input("Massa (kg)", value=PLANCK_MASSA, format="%.3e")
         classico, fluxo = calcular_temperatura_hawking(massa, MARC)
-        st.write(f"**Clássico (aprox):** T = {classico:.3e} K (escala adimensional)")
-        st.write(f"**Fluxo:** T = {fluxo:.3e}")
+        st.write(f"**Temperatura de Hawking (SI):** T = {classico:.3e} K")
+        st.write(f"**Escala Fluxo (×MARC):** T = {fluxo:.3e} K")
+        st.caption("A temperatura clássica usa ħ, c, G e k_B em unidades SI. A multiplicação por MARC é uma transformação do modelo Fluxo, não uma temperatura física independente.")
     elif escolha == "Energia do Ponto Zero":
         freq = st.number_input("Frequência de corte (Hz)", value=1e43, format="%.3e")
         classico, fluxo = calcular_energia_ponto_zero(freq, MARC)
         st.write(f"**Clássico:** E = {classico:.3e} J")
         st.write(f"**Fluxo:** E = {fluxo:.3e} J")
-    elif escolha == "Probabilidade de Emaranhamento":
+    elif escolha == "Decaimento espacial ilustrativo (1/r²)":
         dist = st.number_input("Distância (m)", value=PLANCK_COMPRIMENTO, format="%.3e")
         classico, fluxo = calcular_longa_distancia_emaranhamento(dist, MARC)
-        st.write(f"**Clássico:** P ≈ {classico:.3e}")
-        st.write(f"**Fluxo:** P ≈ {fluxo:.3e}")
+        st.write(f"**Modelo 1/r²:** índice ilustrativo = {classico:.3e}")
+        st.write(f"**Escala do Fluxo (×MARC):** {fluxo:.3e}")
+        st.caption("Este decaimento matemático 1/r² não calcula probabilidade nem demonstra emaranhamento quântico físico.")
 
 # =============================================================================
 # NOVA PÁGINA: ANÁLISE DE PADRÕES
@@ -2155,7 +2300,7 @@ elif pagina == "📈 Análise de Padrões":
         fim = st.number_input("Fim do intervalo", value=10.0)
         passos = st.number_input("Número de pontos", value=100, step=1)
         valores = np.linspace(inicio, fim, int(passos))
-        const_list = [("π", PI), ("φ", PHI), ("Gratidão", GRATIDAO), ("Marc", MARC), ("Deus", DEUS), ("432", FREQUENCIA_BASE)]
+        const_list = [("π", PI), ("φ", PHI), ("Gratidão (modelo)", GRATIDAO), ("MARC (modelo)", MARC), ("DEUS (modelo)", DEUS), ("α", CONSTANTE_ESTRUTURA_FINA)]
         resultados_corr = []
         for val in valores:
             for nome, const in const_list:
@@ -2236,40 +2381,36 @@ elif pagina == "🕒 Relógio Quântico":
         key="fuso_relogio_quantico"
     )
     placeholder = st.empty()
-    for _atualizacao in range(1):  # Uma renderização por execução; evita bloquear a interface.
-        with placeholder.container():
-            fig = relogio.plotar_relogio_quantico()
-            st.pyplot(fig)
-            agora = datetime.datetime.now(pytz.UTC)
-            agora_local = agora.astimezone(pytz.timezone(fuso_relogio))
-            delta = agora - SINGULARIDADE
-            total_segundos = int(delta.total_seconds())
-            dias, resto = divmod(total_segundos, 86400)
-            horas, resto = divmod(resto, 3600)
-            minutos, segundos = divmod(resto, 60)
-            pulsos_atuais = relogio.get_pulsos_desde_singularidade()
-            tempo_fluxo = relogio.converter_pulsos(pulsos_atuais)
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("Hora selecionada", agora_local.strftime("%H:%M:%S"))
-                st.caption(agora_local.strftime("%A, %d/%m/%Y · %Z"))
-            with c2:
-                st.metric("Tempo decorrido", f"{dias:,} dias".replace(",", "."))
-                st.caption(f"{horas:02d}h {minutos:02d}m {segundos:02d}s além dos dias")
-            with c3:
-                st.metric("Pulsos calculados", f"{pulsos_atuais:,}".replace(",", "."))
-                st.caption(f"Eras {tempo_fluxo['eras']} · Ciclos {tempo_fluxo['ciclos']} · Giros {tempo_fluxo['giros']}")
-            st.caption("A leitura é atualizada quando a página é reexecutada; use “Atualizar agora” na barra lateral para recalcular.")
-            st.write("""
-            **Interpretação:**
-            - O tempo flui em espirais quânticas, não linearmente
-            - Cada volta completa representa um ciclo completo
-            - A singularidade é o ponto de origem (12 horas)
-            - Os marcadores 3-6-9 representam pontos de transição dimensional
-            """)
-        if not auto_update:
-            break
-        # A atualização ocorre quando o Streamlit reexecuta o script.
+    with placeholder.container():
+        fig = relogio.plotar_relogio_quantico()
+        st.pyplot(fig)
+        agora = datetime.datetime.now(pytz.UTC)
+        agora_local = agora.astimezone(pytz.timezone(fuso_relogio))
+        delta = agora - SINGULARIDADE
+        total_segundos = int(delta.total_seconds())
+        dias, resto = divmod(total_segundos, 86400)
+        horas, resto = divmod(resto, 3600)
+        minutos, segundos = divmod(resto, 60)
+        pulsos_atuais = relogio.get_pulsos_desde_singularidade()
+        tempo_fluxo = relogio.converter_pulsos(pulsos_atuais)
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Hora selecionada", agora_local.strftime("%H:%M:%S"))
+            st.caption(agora_local.strftime("%A, %d/%m/%Y · %Z"))
+        with c2:
+            st.metric("Tempo decorrido", f"{dias:,} dias".replace(",", "."))
+            st.caption(f"{horas:02d}h {minutos:02d}m {segundos:02d}s além dos dias")
+        with c3:
+            st.metric("Pulsos calculados", f"{pulsos_atuais:,}".replace(",", "."))
+            st.caption(f"Eras {tempo_fluxo['eras']} · Ciclos {tempo_fluxo['ciclos']} · Giros {tempo_fluxo['giros']}")
+        st.caption("A leitura é atualizada quando a página é reexecutada; use “Atualizar agora” na barra lateral para recalcular.")
+        st.write("""
+        **Interpretação:**
+        - O tempo flui em espirais quânticas, não linearmente
+        - Cada volta completa representa um ciclo completo
+        - A singularidade é o ponto de origem (12 horas)
+        - Os marcadores 3-6-9 representam pontos de transição dimensional
+        """)
 
 # =============================================================================
 # PÁGINA: CALENDÁRIO CLÁSSICO (ORIGINAL)
@@ -2284,76 +2425,72 @@ elif pagina == "📅 Calendário Clássico":
     """)
 
     placeholder = st.empty()
-    for _atualizacao in range(1):  # Uma renderização por execução; evita bloquear a interface.
-        with placeholder.container():
-            agora = datetime.datetime.now(pytz.UTC)
-            data_formatada = agora.strftime("%A, %d de %B de %Y")
-            hora_formatada = agora.strftime("%H:%M:%S")
+    with placeholder.container():
+        agora = datetime.datetime.now(pytz.UTC)
+        data_formatada = agora.strftime("%A, %d de %B de %Y")
+        hora_formatada = agora.strftime("%H:%M:%S")
 
-            col1, col2 = st.columns(2)
-            with col1:
-                titulo_ajudado("Data Atual")
-                st.markdown(f"<h1 style='text-align: center; color: #4CAF50;'>{data_formatada}</h1>",
-                           unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            titulo_ajudado("Data Atual")
+            st.markdown(f"<h1 style='text-align: center; color: #4CAF50;'>{data_formatada}</h1>",
+                       unsafe_allow_html=True)
 
-                # Calendário do mês
-                hoje = agora.day
-                mes = agora.month
-                ano = agora.year
-                # Primeiro dia do mês
-                primeiro_dia = datetime.datetime(ano, mes, 1)
-                if mes == 12:
-                    dias_no_mes = 31
-                else:
-                    dias_no_mes = (datetime.datetime(ano, mes + 1, 1) - datetime.timedelta(days=1)).day
-                dia_semana = primeiro_dia.weekday()  # 0=Segunda, 6=Domingo
+            # Calendário do mês
+            hoje = agora.day
+            mes = agora.month
+            ano = agora.year
+            # Primeiro dia do mês
+            primeiro_dia = datetime.datetime(ano, mes, 1)
+            if mes == 12:
+                dias_no_mes = 31
+            else:
+                dias_no_mes = (datetime.datetime(ano, mes + 1, 1) - datetime.timedelta(days=1)).day
+            dia_semana = primeiro_dia.weekday()  # 0=Segunda, 6=Domingo
 
-                semanas = []
-                semana = [""] * dia_semana
-                for dia in range(1, dias_no_mes + 1):
-                    semana.append(str(dia))
-                    if len(semana) == 7:
-                        semanas.append(semana)
-                        semana = []
-                if semana:
-                    semanas.append(semana + [""] * (7 - len(semana)))
+            semanas = []
+            semana = [""] * dia_semana
+            for dia in range(1, dias_no_mes + 1):
+                semana.append(str(dia))
+                if len(semana) == 7:
+                    semanas.append(semana)
+                    semana = []
+            if semana:
+                semanas.append(semana + [""] * (7 - len(semana)))
 
-                df_calendario = pd.DataFrame(semanas, columns=["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"])
-                st.dataframe(df_calendario.style.applymap(lambda x: 'background-color: gold' if x == str(hoje) else ''))
+            df_calendario = pd.DataFrame(semanas, columns=["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"])
+            st.dataframe(df_calendario.style.applymap(lambda x: 'background-color: gold' if x == str(hoje) else ''))
 
-            with col2:
-                titulo_ajudado("Hora Atual")
-                st.markdown(f"<h1 style='text-align: center; color: #2196F3;'>{hora_formatada}</h1>",
-                           unsafe_allow_html=True)
+        with col2:
+            titulo_ajudado("Hora Atual")
+            st.markdown(f"<h1 style='text-align: center; color: #2196F3;'>{hora_formatada}</h1>",
+                       unsafe_allow_html=True)
 
-                # Mostrar também no formato do Fluxo Matemático
-                pulsos = relogio.get_pulsos_desde_singularidade()
-                tempo_fluxo = relogio.converter_pulsos(pulsos)
+            # Mostrar também no formato do Fluxo Matemático
+            pulsos = relogio.get_pulsos_desde_singularidade()
+            tempo_fluxo = relogio.converter_pulsos(pulsos)
 
-                st.write("### No Fluxo Matemático:")
-                st.write(f"- Eras: {tempo_fluxo['eras']}")
-                st.write(f"- Ciclos: {tempo_fluxo['ciclos']}")
-                st.write(f"- Giros: {tempo_fluxo['giros']}")
-                st.write(f"- Vibes: {tempo_fluxo['vibes']}")
-                st.write(f"- Pulsos: {tempo_fluxo['pulsos']}")
+            st.write("### No Fluxo Matemático:")
+            st.write(f"- Eras: {tempo_fluxo['eras']}")
+            st.write(f"- Ciclos: {tempo_fluxo['ciclos']}")
+            st.write(f"- Giros: {tempo_fluxo['giros']}")
+            st.write(f"- Vibes: {tempo_fluxo['vibes']}")
+            st.write(f"- Pulsos: {tempo_fluxo['pulsos']}")
 
-                # Redução teosófica da data e hora
-                data_num = int(agora.strftime("%Y%m%d"))
-                hora_num = int(agora.strftime("%H%M%S"))
-                st.write("### Redução Teosófica:")
-                st.write(f"- Data ({data_num}): {reduzir_teosoficamente(data_num)}")
-                st.write(f"- Hora ({hora_num}): {reduzir_teosoficamente(hora_num)}")
+            # Redução teosófica da data e hora
+            data_num = int(agora.strftime("%Y%m%d"))
+            hora_num = int(agora.strftime("%H%M%S"))
+            st.write("### Redução Teosófica:")
+            st.write(f"- Data ({data_num}): {reduzir_teosoficamente(data_num)}")
+            st.write(f"- Hora ({hora_num}): {reduzir_teosoficamente(hora_num)}")
 
-            st.write("""
-            **Conexão com o Fluxo Matemático:**
-            - Mesmo na visualização clássica, podemos perceber os padrões numéricos
-            - A redução teosófica revela a essência vibracional de cada momento
-            - O calendário mostra a estrutura cíclica do tempo
-            """)
+        st.write("""
+        **Conexão com o Fluxo Matemático:**
+        - Mesmo na visualização clássica, podemos perceber os padrões numéricos
+        - A redução teosófica revela a essência vibracional de cada momento
+        - O calendário mostra a estrutura cíclica do tempo
+        """)
 
-        if not auto_update:
-            break
-        # A atualização ocorre quando o Streamlit reexecuta o script.
 
 # =============================================================================
 # PÁGINA: SINGULARIDADE (ORIGINAL)
@@ -2786,7 +2923,7 @@ with obs_tabs[4]:
     # Massa e frequência em escala logarítmica para mostrar a diferença de ordens de grandeza.
     m_plot = np.logspace(-12, 12, 160)
     f_plot = np.full_like(m_plot, obs_frequencia)
-    raio_plot = np.clip(30 + 6*np.log10(m_plot + 1e-300) + 72, 3, 180)
+    raio_plot = np.clip(30 + 6*np.log10(m_plot + 1e-30) + 72, 3, 180)
     fig_mass, ax_mass = plt.subplots(figsize=(11, 3.5))
     pts = ax_mass.scatter(m_plot, f_plot, c=np.log10(m_plot), s=raio_plot, cmap=obs_paleta, alpha=0.7)
     ax_mass.set_xscale("log")
