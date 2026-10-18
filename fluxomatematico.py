@@ -2794,7 +2794,7 @@ with obs_tabs[4]:
     ax_mass.set_ylabel("Frequência escolhida (Hz)")
     ax_mass.set_title("Mapa de escala de massa · tamanho/cor codificam a ordem de grandeza")
     fig_mass.colorbar(pts, ax=ax_mass, label="log₁₀(massa em kg)")
-    fig_mass.grid(True, alpha=0.2)
+    ax_mass.grid(True, alpha=0.2)
     fig_mass.tight_layout()
     st.pyplot(fig_mass, use_container_width=True)
     plt.close(fig_mass)
